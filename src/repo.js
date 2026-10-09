@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { copyFile, mkdtemp, realpath, rm } from 'node:fs/promises';
+import { copyFile, mkdtemp, realpath, rm, stat, utimes } from 'node:fs/promises';
 import { realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -63,7 +63,15 @@ export async function snapshot(repo) {
   const env = { GIT_INDEX_FILE: path.join(temp, 'index') };
   try {
     const indexPath = (await git(repo.root, ['rev-parse', '--git-path', 'index'])).trim();
-    try { await copyFile(path.resolve(repo.root, indexPath), env.GIT_INDEX_FILE); }
+    try {
+      const source = path.resolve(repo.root, indexPath);
+      const metadata = await stat(source);
+      await copyFile(source, env.GIT_INDEX_FILE);
+      // A newer copy timestamp can make Git trust stale stat data and miss a
+      // same-size edit within one clock tick. Round down conservatively so Git's
+      // racy-index content check remains active, including on coarse filesystems.
+      await utimes(env.GIT_INDEX_FILE, metadata.atime, Math.floor(metadata.mtimeMs / 1000));
+    }
     catch (error) {
       if (error.code !== 'ENOENT') throw error;
       await git(repo.root, ['read-tree', '--empty'], env);

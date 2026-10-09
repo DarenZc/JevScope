@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, writeFile, rm, rename, symlink } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, writeFile, rm, rename, symlink, stat, utimes } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -114,6 +114,28 @@ test('baseline preserves pre-existing staged, unstaged and untracked work; captu
   assert.doesNotMatch(changes[0].diff, /\+user unstaged/);
   assert.equal(await git(repo.root, ['diff', '--cached']), indexBefore);
   assert.equal(await readFile(path.join(repo.root, 'user draft.txt'), 'utf8'), 'user draft\n');
+});
+
+test('snapshot detects same-size edits made within a Git index timestamp tick', async t => {
+  const repo = await fixture(t, { 'app.js': 'const value = 1;\n' });
+  await git(repo.root, ['config', 'core.trustctime', 'false']);
+  await git(repo.root, ['config', 'core.checkstat', 'minimal']);
+  const file = path.join(repo.root, 'app.js');
+  const tick = new Date(Math.floor(Date.now() / 1000) * 1000 - 60000);
+  await utimes(file, tick, tick);
+  await git(repo.root, ['add', 'app.js']);
+  const index = path.resolve(repo.root, (await git(repo.root, ['rev-parse', '--git-path', 'index'])).trim());
+  await utimes(index, tick, tick);
+  const indexBefore = await readFile(index);
+  const timestampBefore = (await stat(index)).mtimeMs;
+  const before = await snapshot(repo);
+  await writeFile(file, 'const value = 2;\n');
+  await utimes(file, tick, tick);
+  const changes = await changesBetween(repo, before, await snapshot(repo));
+  assert.equal(changes.length, 1);
+  assert.match(changes[0].diff, /\+const value = 2/);
+  assert.deepEqual(await readFile(index), indexBefore);
+  assert.equal((await stat(index)).mtimeMs, timestampBefore);
 });
 
 test('empty unborn repo can establish a task and detect a newly staged file', async t => {
