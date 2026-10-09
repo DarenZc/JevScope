@@ -1,20 +1,27 @@
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { resolveHost } from './hosts.js';
 
 export const scopeScript = fileURLToPath(new URL('../bin/scope.js', import.meta.url));
 export const toolEnv = fileURLToPath(new URL('../.env', import.meta.url));
 
 export function codexHome(override) {
-  const directory = override ?? process.env.CODEX_HOME ?? path.join(homedir(), '.codex');
-  if (!directory.trim()) throw new Error('Codex 配置目录不能为空。');
-  return path.resolve(directory);
+  return configPaths(override).home;
 }
 
-export function configPaths(override) {
-  const home = codexHome(override);
+// A string is the original Codex home API, retained for existing callers.
+export function configPaths(input = {}) {
+  const options = typeof input === 'string' ? { codexHome: input } : input;
+  const host = resolveHost(options.host);
+  if (options.codexHome !== undefined && host.id !== 'codex') throw new Error('--codex-home 仅用于 Codex；其他宿主请使用 --host-home。');
+  if (options.codexHome !== undefined && options.hostHome !== undefined
+    && path.resolve(options.codexHome) !== path.resolve(options.hostHome)) throw new Error('--codex-home 与 --host-home 指向不同目录。');
+  const selected = options.hostHome ?? options.codexHome ?? process.env[host.env] ?? path.join(homedir(), host.directory);
+  if (typeof selected !== 'string' || !selected.trim()) throw new Error(`${host.name} 配置目录不能为空。`);
+  const home = path.resolve(selected);
   const directory = path.join(home, 'jev-scope');
-  return { home, directory, hooks: path.join(home, 'hooks.json'),
+  return { host, home, directory, hooks: path.join(home, host.config),
     manifest: path.join(directory, 'install.json'), env: path.join(directory, '.env') };
 }
 
@@ -35,6 +42,26 @@ export function shellCommand(args, platform = process.platform) {
 }
 
 export function cliCommand(args, options = {}) {
-  return shellCommand([options.node ?? process.execPath, options.script ?? scopeScript, ...args,
-    ...(options.codexHome ? ['--codex-home', options.codexHome] : [])], options.platform);
+  const host = resolveHost(options.host);
+  const platform = options.platform ?? process.platform;
+  // Git Bash accepts C:/...; backslashes inside single quotes are literal there.
+  const portable = value => host.id !== 'codex' && platform !== 'win32' && process.platform === 'win32' ? value.replaceAll('\\', '/') : value;
+  return shellCommand([portable(options.node ?? process.execPath), portable(options.script ?? scopeScript), ...args,
+    ...(host.id !== 'codex' ? ['--host', host.id] : []),
+    ...(options.hostHome !== undefined ? ['--host-home', portable(options.hostHome)] : []),
+    ...(options.codexHome !== undefined ? ['--codex-home', portable(options.codexHome)] : [])], platform);
+}
+
+export function hookCommand(options = {}) {
+  const host = resolveHost(options.host);
+  const windows = (options.platform ?? process.platform) === 'win32';
+  if (host.id === 'codex') return {
+    command: cliCommand(['hook'], { ...options, platform: 'posix' }),
+    ...(windows ? { commandWindows: cliCommand(['hook'], { ...options, platform: 'win32' }) } : {}),
+  };
+  if (!windows) return { command: cliCommand(['hook'], { ...options, platform: 'posix' }) };
+  // These hosts do not share Codex's commandWindows field. A bare PowerShell
+  // launcher works from Git Bash, cmd and PowerShell, without interpolating paths.
+  const script = cliCommand(['hook'], { ...options, platform: 'win32' });
+  return { command: `powershell.exe -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(script, 'utf16le').toString('base64')}` };
 }

@@ -1,21 +1,22 @@
 import { createHash } from 'node:crypto';
-import { cliCommand } from './config.js';
+import { cliCommand, hookCommand } from './config.js';
+import { resolveHost } from './hosts.js';
 import { activeTask, readState, writeState } from './task.js';
-import { repository, patchChanges } from './repo.js';
+import { repository } from './repo.js';
+import { toolChanges } from './tool-changes.js';
 import { boundaryFindings, checkRepository, reviewChanges } from './review.js';
 import { importantFindings, renderNotice, renderReport } from './report.js';
 import { REVIEW_VERSION } from './review-plan.js';
 import { withCheckLock } from './check-lock.js';
 
 export function hookConfiguration(options = {}) {
-  const command = cliCommand(['hook'], { ...options, platform: 'posix' });
-  const commandOptions = (options.platform ?? process.platform) === 'win32'
-    ? { command, commandWindows: cliCommand(['hook'], { ...options, platform: 'win32' }) }
-    : { command };
-  const handler = { type: 'command', ...commandOptions, timeout: 20, additionalContextLimit: 5000 };
+  const host = resolveHost(options.host);
+  const commandOptions = hookCommand(options);
+  const handler = { type: 'command', ...commandOptions, timeout: 20,
+    ...(host.id === 'codex' ? { additionalContextLimit: 5000 } : {}) };
   return { hooks: {
     UserPromptSubmit: [{ hooks: [handler] }],
-    PreToolUse: [{ matcher: '^apply_patch$', hooks: [handler] }],
+    PreToolUse: [{ matcher: host.id === 'codex' ? '^apply_patch$' : `^(${host.tools.join('|')})$`, hooks: [handler] }],
     // A background Stop result can wait until the next user turn. Finish this check
     // synchronously so systemMessage is surfaced before the current turn closes.
     Stop: [{ hooks: [{ type: 'command', ...commandOptions, async: false, timeout: 45 }] }],
@@ -32,12 +33,12 @@ function deny(reason) {
   } };
 }
 
-export async function takeNotice(repo, report, delivery = 'hook') {
+export async function takeNotice(repo, report, delivery = 'hook', host = 'codex') {
   // User and project Hooks can both run. Serialize delivery as well as review.
-  return withCheckLock(repo, true, () => takeNoticeLocked(repo, report, delivery));
+  return withCheckLock(repo, true, () => takeNoticeLocked(repo, report, delivery, resolveHost(host).id));
 }
 
-async function takeNoticeLocked(repo, report, delivery) {
+async function takeNoticeLocked(repo, report, delivery, host) {
   const active = await activeTask(repo);
   if (report.stale || !active?.active || active.id !== report.taskId || active.revision !== report.revision) return '';
   const message = renderNotice(report, '说“查看范围检查报告”');
@@ -46,17 +47,19 @@ async function takeNoticeLocked(repo, report, delivery) {
       contentHash: report.files.find(file => file.file === item.file)?.contentHash })),
     incomplete: report.semantic === 'incomplete', notice: report.notice, skipped: report.skipped,
   })).digest('hex');
-  const name = delivery === 'chat' ? 'chat-notification.json' : 'notification.json';
+  const prefix = host === 'codex' ? '' : `${host}-`;
+  const name = `${prefix}${delivery === 'chat' ? 'chat-notification.json' : 'notification.json'}`;
   const matches = previous => previous?.taskId === active.id && previous.revision === active.revision && previous.signature === signature;
   if (matches(await readState(repo, name))) return '';
   // A hidden native Hook entry must not consume a later visible chat notice.
   // Once the final-answer path has surfaced it, Stop can remain quiet.
-  if (delivery === 'hook' && matches(await readState(repo, 'chat-notification.json'))) return '';
+  if (delivery === 'hook' && matches(await readState(repo, `${prefix}chat-notification.json`))) return '';
   await writeState(repo, name, { taskId: active.id, revision: active.revision, signature });
   return message;
 }
 
 export async function runHook(payload, options = {}) {
+  const host = resolveHost(options.host);
   const event = payload.hook_event_name;
   if (!['UserPromptSubmit', 'PreToolUse', 'Stop'].includes(event)) return {};
   // Global Hooks also see non-project chats. Do not create Git repos or tasks there.
@@ -71,7 +74,9 @@ export async function runHook(payload, options = {}) {
     const command = cliCommand(['--cwd', repo.root], options);
     const text = [
       '此 Git 工作区已接入 Jev Scope。沿用正常聊天，代用户维护范围记录，无需用户手动运行命令。',
-      `CLI 前缀（PowerShell/POSIX 按当前系统引用）：${command}`,
+      `CLI 前缀（${process.platform === 'win32' ? 'PowerShell' : 'POSIX shell'}）：${command}`,
+      ...(process.platform === 'win32' && host.id !== 'codex'
+        ? [`若使用 Git Bash 工具，请使用此前缀：${cliCommand(['--cwd', repo.root.replaceAll('\\', '/')], { ...options, platform: 'posix' })}`] : []),
       '以下子命令追加在此前缀后；需求原文按当前 shell 安全引用，不能作为代码执行。',
       '实际修改前运行 status；没有活动任务时，用 start "用户需求原话" --review end 记录需求与当前文件基线。问答和只读浏览无需建立任务。',
       '同一任务的明确补充用 amend "用户补充原话"；撤销或替换旧要求同时用 --drop R/C编号。只记录用户原话，不把自己的计划或建议当作授权。',
@@ -99,13 +104,13 @@ export async function runHook(payload, options = {}) {
     try { report = await checkRepository(repo, { ...options, automatic: true }); }
     catch (error) { if (error.code === 'SCOPE_CHECK_BUSY') return {}; throw error; }
     // Never create continuation prompts. Uncertain-only results remain in the report.
-    const message = await takeNotice(repo, report);
+    const message = await takeNotice(repo, report, 'hook', host.id);
     return message ? { systemMessage: message } : {};
   }
-  if (payload.tool_name !== 'apply_patch') return {};
-  if (task.mode === 'review') return deny('当前任务为只读审查，不能通过 apply_patch 修改文件。');
+  if (!host.tools.includes(payload.tool_name)) return {};
+  if (task.mode === 'review') return deny(`当前任务为只读审查，不能通过 ${payload.tool_name} 修改文件。`);
   let changes;
-  try { changes = patchChanges(payload.tool_input?.command ?? payload.tool_input?.input ?? payload.tool_input?.patch, repo); }
+  try { changes = await toolChanges(payload, repo); }
   catch (error) {
     if (/工作区之外/.test(error.message)) return deny(error.message);
     if (task.allowedPaths.length) return deny('无法识别补丁路径，不能确认其位于显式文件边界内。');
@@ -115,6 +120,8 @@ export async function runHook(payload, options = {}) {
   if (violations.length) return deny(violations.map(item => `${item.file}：${item.reason}`).join('\n'));
   // Without a key, the end-of-turn report explains that semantic checks are incomplete.
   if (task.reviewMode !== 'live' || options.offline || !(options.apiKey ?? process.env.OPENROUTER_API_KEY)) return {};
+  try { changes = await toolChanges(payload, repo, { includeDiff: true }); }
+  catch (error) { return { systemMessage: `Jev Scope：${error.message}` }; }
   const key = `${task.id}:${task.revision}:${createHash('sha256').update(JSON.stringify(changes)).digest('hex')}`;
   const previous = await readState(repo, 'proposal.json');
   let report;

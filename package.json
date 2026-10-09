@@ -1,7 +1,7 @@
 {
   "name": "jev-scope",
-  "version": "0.3.0",
-  "description": "对照用户需求检查开发改动范围的轻量 CLI 与 Codex Hooks",
+  "version": "0.4.0",
+  "description": "对照用户需求检查开发改动范围，支持 Codex、Claude Code、WorkBuddy 与 CodeBuddy Hooks",
   "type": "module",
   "license": "MIT",
   "repository": { "type": "git", "url": "https://github.com/DarenZc/JevScope.git" },
@@ -17,8 +17,13 @@
     "demo": "node examples/demo.js",
     "scope": "node bin/scope.js",
     "setup:codex": "node bin/scope.js install",
+    "setup:claude": "node bin/scope.js install --host claude-code",
+    "setup:workbuddy": "node bin/scope.js install --host workbuddy",
+    "setup:codebuddy": "node bin/scope.js install --host codebuddy",
     "doctor": "node bin/scope.js doctor",
     "verify:codex": "node evaluation/verify-global-install.js",
+    "verify:claude": "node evaluation/verify-host-hooks.js --host claude-code",
+    "verify:workbuddy": "node evaluation/verify-host-hooks.js --host workbuddy",
     "verify:package": "node scripts/verify-package.js"
   }
 }

@@ -16,7 +16,7 @@ const { stdout } = await exec(process.execPath, [npm, 'pack', '--dry-run', '--js
 });
 const [result] = JSON.parse(stdout);
 const files = result.files.map(file => file.path.replaceAll('\\', '/'));
-for (const required of ['bin/scope.js', 'bin/ui.js', 'src/install.js', 'src/config.js', 'web/index.html',
+for (const required of ['bin/scope.js', 'bin/ui.js', 'src/install.js', 'src/config.js', 'src/hosts.js', 'src/tool-changes.js', 'web/index.html',
   'package.json', 'README.md', 'LICENSE', '.env.example']) assert.ok(files.includes(required), `Missing ${required}`);
 for (const file of files) {
   assert.ok(/^(?:bin\/[^/]+\.js|src\/[^/]+\.js|web\/[^/]+\.(?:js|css|html|svg)|examples\/demo\.js|package\.json|README\.md|LICENSE|\.env\.example)$/.test(file),
@@ -48,6 +48,16 @@ try {
   assert.equal(JSON.parse((await run(['check', '--offline', '--json'])).stdout).files.length, 0);
   const hook = await exec(process.execPath, [cli, 'hook-config', '--codex-home', home], { windowsHide: true });
   assert.equal(Object.keys(JSON.parse(hook.stdout).hooks).length, 3);
+  for (const host of ['claude-code', 'workbuddy', 'codebuddy']) {
+    const hostHome = path.join(temp, host);
+    const args = ['--host', host, '--host-home', hostHome];
+    const installed = JSON.parse((await run(['install', ...args, '--json'])).stdout);
+    assert.equal(installed.host, host);
+    assert.equal(Object.keys(JSON.parse(await readFile(installed.hooksPath, 'utf8')).hooks).length, 3);
+    assert.equal(JSON.parse((await run(['install', ...args, '--json'])).stdout).changed, false);
+    await run(['uninstall', ...args]);
+    await assert.rejects(readFile(installed.hooksPath), { code: 'ENOENT' });
+  }
   const { startWorkbench } = await import(pathToFileURL(path.join(temp, 'package', 'src', 'workbench.js')));
   const workbench = await startWorkbench({ cwd: project, port: 0 });
   server = workbench.server;
@@ -58,7 +68,7 @@ try {
   }
   await run(['uninstall']);
   await assert.rejects(readFile(path.join(home, 'hooks.json')), { code: 'ENOENT' });
-  console.log('Packed CLI install/check/uninstall and workbench assets passed in an isolated directory.');
+  console.log('Packed CLI install/check/uninstall for all four hosts and workbench assets passed in an isolated directory.');
 } finally {
   if (server) await new Promise(resolve => { server.close(resolve); server.closeAllConnections(); });
   const target = path.resolve(temp);

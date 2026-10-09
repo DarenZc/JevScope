@@ -6,7 +6,8 @@ import { checkRepository } from '../src/review.js';
 import { renderReport, reportExitCode } from '../src/report.js';
 import { hookConfiguration, runHook, takeNotice } from '../src/hooks.js';
 import { isCheckRunning } from '../src/check-lock.js';
-import { loadEnvironment } from '../src/config.js';
+import { loadEnvironment, configPaths } from '../src/config.js';
+import { supportedHosts } from '../src/hosts.js';
 import { install, uninstall, doctor } from '../src/install.js';
 
 const HELP = `Jev Scope — 对照需求检查开发改动范围
@@ -19,9 +20,10 @@ node bin/scope.js check --for-chat
 node bin/scope.js report [--json]
 node bin/scope.js finish
 node bin/scope.js hook-config
-node bin/scope.js install
-node bin/scope.js uninstall
-node bin/scope.js doctor [--json]
+node bin/scope.js hosts [--json]
+node bin/scope.js install [--host codex|claude-code|workbuddy|codebuddy]
+node bin/scope.js uninstall [--host 宿主]
+node bin/scope.js doctor [--host 宿主] [--json]
 
 start / amend 选项：
   --mode review|change    只读审查 / 允许必要修改（默认 change）
@@ -35,12 +37,13 @@ start / amend 选项：
 所有仓库命令可加 --cwd "项目目录"。每个 Git 工作区保存一个活动任务。
 report 只查看上次结果，不发送 API 请求；“需核对”项在这里展开。
 check --for-chat 用于最终答复前检查：仅输出尚未展示的简短提醒，正常、重复或手动模式保持安静。
-install 将 Hooks 合并到全局 Codex 配置，保留已有配置；uninstall 只移除本工具登记的条目。
-安装后在 Codex /hooks 中审阅并信任。支持本地 Codex Git 工作区，不适用于云端编排。
-全局命令支持 --codex-home "目录"；默认使用 CODEX_HOME 或 ~/.codex。
-在 ~/.codex/jev-scope/.env 或本工具 .env 中配置 OPENROUTER_API_KEY；进程环境变量优先。
+install 将 Hooks 合并到指定宿主的全局配置，默认 Codex；uninstall 只移除登记的条目。
+安装后在对应客户端审阅并启用 Hooks。仅支持本地 Git 工作区，不适用于云端编排。
+所有命令支持 --host 和 --host-home "配置目录"；--codex-home 保持兼容。
+默认目录：~/.codex、~/.claude、~/.workbuddy、~/.codebuddy；优先使用宿主自己的配置目录环境变量。
+在所选宿主的 jev-scope/.env 或本工具 .env 中配置 OPENROUTER_API_KEY；进程环境变量优先。
 check 退出码：0 未发现问题；1 有待核对项；2 检查不完整或发生错误。
-hook-config 只输出配置，请合并到目标项目的 .codex/hooks.json 并通过 /hooks 信任。
+hook-config 只输出所选宿主的配置，不自动安装或授予信任。
 `;
 
 async function main() {
@@ -54,21 +57,29 @@ async function main() {
       offline: { type: 'boolean' }, json: { type: 'boolean' }, refresh: { type: 'boolean' },
       'for-chat': { type: 'boolean' },
       'codex-home': { type: 'string' },
+      host: { type: 'string' }, 'host-home': { type: 'string' },
       help: { type: 'boolean', short: 'h' },
     },
   });
   const [command, ...args] = positionals;
   if (values.help || !command) { process.stdout.write(HELP); return; }
   if (values['for-chat'] && (command !== 'check' || values.json)) throw new Error('--for-chat 仅用于 check，不能与 --json 同用。');
-  const globalOptions = { codexHome: values['codex-home'] };
+  const globalOptions = { host: values.host, hostHome: values['host-home'], codexHome: values['codex-home'] };
+  configPaths(globalOptions); // Validate options before any configuration or task mutation.
+  if (command === 'hosts') {
+    const hosts = supportedHosts().map(({ id, name, directory, env, config }) => ({ id, name, config: `~/${directory}/${config}`, env }));
+    process.stdout.write(values.json ? `${JSON.stringify(hosts, null, 2)}\n`
+      : `${hosts.map(host => `${host.id} · ${host.name} · ${host.config}`).join('\n')}\n`);
+    return;
+  }
   if (command === 'hook-config') { process.stdout.write(`${JSON.stringify(hookConfiguration(globalOptions), null, 2)}\n`); return; }
   if (command === 'install' || command === 'uninstall') {
     const result = await (command === 'install' ? install : uninstall)(globalOptions);
     if (values.json) process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
     else if (command === 'install') process.stdout.write([
-      result.changed ? '已安装全局 Jev Scope Hooks。' : '全局 Jev Scope Hooks 已是最新，无重复添加。',
+      result.changed ? `已安装 ${result.name} 全局 Jev Scope Hooks。` : `${result.name} 全局 Jev Scope Hooks 已是最新，无重复添加。`,
       `配置：${result.hooksPath}`, `密钥：${result.envPath}（也可继续使用本工具 .env）`,
-      '在 Codex /hooks 中审阅并信任这 3 个 Hook，然后打开或恢复本地项目会话。',
+      result.trust,
       ...(result.backup ? [`原配置备份：${result.backup}`] : []), '',
     ].join('\n'));
     else process.stdout.write([
@@ -79,7 +90,7 @@ async function main() {
     ].join('\n'));
     return;
   }
-  loadEnvironment(values['codex-home']);
+  loadEnvironment(globalOptions);
   if (command === 'doctor') {
     const result = await doctor(globalOptions);
     process.stdout.write(values.json ? `${JSON.stringify(result, null, 2)}\n`
@@ -124,7 +135,7 @@ async function main() {
     }
     const report = await checkRepository(repo, { offline: values.offline, refresh: values.refresh, automatic: values['for-chat'] });
     if (values['for-chat']) {
-      const message = await takeNotice(repo, report, 'chat');
+      const message = await takeNotice(repo, report, 'chat', values.host);
       if (message) process.stdout.write(`${message}\n`);
       return;
     }

@@ -57,6 +57,14 @@ function canonicalPatchPath(name, cwd) {
   }
 }
 
+export function workspaceFile(repo, name) {
+  if (typeof name !== 'string' || !name.trim() || name.includes('\0')) throw new Error('无法识别修改文件路径。');
+  const absolute = canonicalPatchPath(name, repo.workingDir ?? repo.root);
+  const file = path.relative(repo.root, absolute).replaceAll('\\', '/');
+  if (!file || file === '..' || file.startsWith('../') || path.isAbsolute(file)) throw new Error('修改路径位于当前工作区之外。');
+  return { absolute, file };
+}
+
 // A separate index includes staged, unstaged and new files without changing the user's index.
 export async function snapshot(repo) {
   const temp = await mkdtemp(path.join(tmpdir(), 'jev-scope-index-'));
@@ -138,9 +146,7 @@ export function patchChanges(command, repo) {
     const move = part.match(/^\*\*\* Move to: (.+)\r?$/m);
     if (move) names.push(move[1].trim());
     return names.map(name => {
-      const absolute = canonicalPatchPath(name, repo.workingDir ?? repo.root);
-      const file = path.relative(repo.root, absolute).replaceAll('\\', '/');
-      if (!file || file.startsWith('../') || path.isAbsolute(file)) throw new Error('补丁路径位于当前工作区之外。');
+      const { file } = workspaceFile(repo, name);
       return { file, operation: header[1], diff: part };
     });
   }).map((change, i) => ({ ...change, id: `F${i + 1}` }));

@@ -15,32 +15,33 @@ async function readOptional(file) {
   catch (error) { if (error.code === 'ENOENT') return null; throw error; }
 }
 
-function parseConfig(raw) {
+function parseConfig(raw, filename = 'hooks.json') {
   let config;
   try { config = raw === null ? {} : JSON.parse(raw.replace(/^\uFEFF/, '')); }
-  catch { throw new Error('hooks.json 不是有效 JSON；原文件未作修改。'); }
+  catch { throw new Error(`${filename} 不是有效 JSON；原文件未作修改。`); }
   if (!isObject(config) || (config.hooks !== undefined && !isObject(config.hooks))) {
-    throw new Error('hooks.json 的 hooks 必须是对象；原文件未作修改。');
+    throw new Error(`${filename} 的 hooks 必须是对象；原文件未作修改。`);
   }
   for (const groups of Object.values(config.hooks ?? {})) {
     if (!Array.isArray(groups) || groups.some(group => !isObject(group) || !Array.isArray(group.hooks)
       || group.hooks.some(handler => !isObject(handler)))) {
-      throw new Error('hooks.json 含无法合并的事件配置；原文件未作修改。');
+      throw new Error(`${filename} 含无法合并的事件配置；原文件未作修改。`);
     }
   }
   return config;
 }
 
-async function readManifest(file) {
+async function readManifest(file, host) {
   const raw = await readOptional(file);
   if (raw === null) return null;
   let state;
   try { state = JSON.parse(raw); } catch { /* Handled below without echoing file contents. */ }
   if (state?.version !== 1 || !Array.isArray(state.registrations) || !state.registrations.length || !isObject(state.original)
-    || state.registrations.some(item => typeof item.event !== 'string' || !isObject(item.group)
+    || state.registrations.some(item => !isObject(item) || typeof item.event !== 'string' || !isObject(item.group)
       || !Array.isArray(item.group.hooks) || item.group.hooks.length !== 1 || !isObject(item.group.hooks[0]))) {
-    throw new Error('Jev Scope 安装记录损坏；请保留现有 hooks.json 并检查 install.json。');
+    throw new Error('Jev Scope 安装记录损坏；请保留现有配置并检查 install.json。');
   }
+  if ((state.host ?? 'codex') !== host.id) throw new Error('此目录已用于其他宿主的 Jev Scope 安装；请使用该宿主独立的配置目录。');
   return state;
 }
 
@@ -117,7 +118,7 @@ function editedOwned(config, entries) {
 }
 
 async function backupAndWrite(paths, before, after) {
-  if (await readOptional(paths.hooks) !== before) throw new Error('hooks.json 已被其他程序修改，请重新运行命令。');
+  if (await readOptional(paths.hooks) !== before) throw new Error(`${paths.host.config} 已被其他程序修改，请重新运行命令。`);
   let backup = null;
   if (before !== null) {
     const directory = path.join(paths.directory, 'backups');
@@ -131,12 +132,13 @@ async function backupAndWrite(paths, before, after) {
 }
 
 export async function install(options = {}) {
-  const paths = configPaths(options.codexHome);
+  const paths = configPaths(options);
   return withInstallLock(paths, async () => {
     const before = await readOptional(paths.hooks);
-    const current = parseConfig(before);
-    const previous = await readManifest(paths.manifest);
-    const desired = registrations(hookConfiguration({ ...options, codexHome: paths.home }));
+    const current = parseConfig(before, paths.host.config);
+    const previous = await readManifest(paths.manifest, paths.host);
+    const desired = registrations(hookConfiguration({ ...options,
+      ...(paths.host.id === 'codex' ? { codexHome: paths.home, hostHome: undefined } : { hostHome: paths.home }) }));
     const original = previous?.original ?? { hadHooks: current.hooks !== undefined,
       emptyEvents: Object.entries(current.hooks ?? {}).filter(([, groups]) => !groups.length).map(([event]) => event) };
     const next = structuredClone(current);
@@ -149,7 +151,7 @@ export async function install(options = {}) {
     for (const entry of desired) {
       if (!findHandler(next, entry)) (next.hooks[entry.event] ??= []).push(entry.group);
     }
-    const state = { version: 1, script: options.script ?? scopeScript, node: options.node ?? process.execPath,
+    const state = { version: 1, host: paths.host.id, script: options.script ?? scopeScript, node: options.node ?? process.execPath,
       original, registrations: desired };
     const changed = !isDeepStrictEqual(current, next);
     // Save both generations first so retry/uninstall can recover an interrupted update.
@@ -159,18 +161,18 @@ export async function install(options = {}) {
     await atomicWrite(paths.manifest, `${JSON.stringify(state, null, 2)}\n`);
     await writeFile(path.join(paths.directory, '.env.example'), ENV_EXAMPLE, { flag: 'wx', mode: 0o600 })
       .catch(error => { if (error.code !== 'EEXIST') throw error; });
-    return { changed, hooksPath: paths.hooks, envPath: paths.env, backup,
-      trust: 'Review the installed definitions in Codex /hooks. Installation does not grant trust.' };
+    return { host: paths.host.id, name: paths.host.name, changed, hooksPath: paths.hooks, envPath: paths.env, backup,
+      trust: `${paths.host.activation} 安装器不会自动授予信任。` };
   });
 }
 
 export async function uninstall(options = {}) {
-  const paths = configPaths(options.codexHome);
+  const paths = configPaths(options);
   return withInstallLock(paths, async () => {
-    const previous = await readManifest(paths.manifest);
+    const previous = await readManifest(paths.manifest, paths.host);
     if (!previous) return { changed: false, hooksPath: paths.hooks, preserved: 0, unmatched: 0, backup: null };
     const before = await readOptional(paths.hooks);
-    const current = parseConfig(before);
+    const current = parseConfig(before, paths.host.config);
     const next = structuredClone(current);
     const unmatched = previous.registrations.filter(entry => !findHandler(current, entry)).length;
     removeOwned(next, previous.registrations, previous.original);
@@ -183,17 +185,18 @@ export async function uninstall(options = {}) {
 }
 
 export async function doctor(options = {}) {
-  const paths = configPaths(options.codexHome);
+  const paths = configPaths(options);
   const checks = [{ name: 'Node.js', ok: Number(process.versions.node.split('.')[0]) >= 22, detail: process.version }];
   try {
     const { stdout } = await exec('git', ['--version'], { windowsHide: true, timeout: 5000 });
     checks.push({ name: 'Git', ok: true, detail: stdout.trim() });
-  } catch { checks.push({ name: 'Git', ok: false, detail: '未找到可用的 Git，请安装后重启 Codex。' }); }
+  } catch { checks.push({ name: 'Git', ok: false, detail: `未找到可用的 Git，请安装后重启 ${paths.host.name}。` }); }
   try {
-    const current = parseConfig(await readOptional(paths.hooks));
-    const state = await readManifest(paths.manifest);
+    const current = parseConfig(await readOptional(paths.hooks), paths.host.config);
+    const state = await readManifest(paths.manifest, paths.host);
     const installed = state?.registrations.every(entry => findHandler(current, entry)) ?? false;
     checks.push({ name: '全局 Hooks', ok: installed, detail: installed ? paths.hooks : '未安装或配置已改变，请运行 install。' });
+    if (current.disableAllHooks === true) checks.push({ name: 'Hooks 开关', ok: false, detail: '宿主配置 disableAllHooks=true；安装器保留此设置。' });
     if (state) {
       for (const [name, file] of [['Node 路径', state.node], ['CLI 路径', state.script]]) {
         try { const handle = await open(file, 'r'); await handle.close(); checks.push({ name, ok: true, detail: file }); }
@@ -203,6 +206,6 @@ export async function doctor(options = {}) {
   } catch (error) { checks.push({ name: '全局 Hooks', ok: false, detail: error.message }); }
   checks.push({ name: 'OpenRouter 密钥', ok: Boolean(process.env.OPENROUTER_API_KEY),
     detail: process.env.OPENROUTER_API_KEY ? '已配置（未联网验证）' : `未配置；填写 ${paths.env}，或仅使用离线检查。` });
-  return { ok: checks.every(check => check.ok), checks, hooksPath: paths.hooks, envPath: paths.env,
-    trust: '安装状态不代表已信任或已启用。请在支持 Hooks 的本地 Codex 中打开 /hooks 核对。' };
+  return { host: paths.host.id, name: paths.host.name, ok: checks.every(check => check.ok), checks, hooksPath: paths.hooks, envPath: paths.env,
+    trust: `安装状态不代表已信任或已启用。${paths.host.activation}` };
 }
