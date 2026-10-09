@@ -1,0 +1,33 @@
+/* Shared typography and accessibility; layout lives in layout.css. */
+:root {
+  font-family: "Trebuchet MS", "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", sans-serif;
+}
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+.file-open,
+.file-name {
+  font-size: 12px;
+}
+.file-dir {
+  font-size: 11px;
+}
+@media (max-width: 600px) {
+  .requirement-row h3 { font-size: 13px; }
+  .report-summary h2 { font-size: 14px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *:before, *:after {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
+}

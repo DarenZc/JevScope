@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#fff5df">
+  <title>Jev Scope · 工作台</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/layout.css">
+  <link rel="stylesheet" href="/readability.css">
+  <script type="module" src="/app.js"></script>
+</head>
+<body>
+  <div class="app" id="app">
+    <nav class="activity-bar" aria-label="主导航">
+      <a class="brand-icon" href="#overview" aria-label="Jev 工作台">j.</a>
+      <div class="activity-links">
+        <button class="rail-button active" data-view="overview" data-icon="branch" aria-label="范围总览" title="文件改动"></button>
+        <button class="rail-button" data-view="report" data-icon="report" aria-label="检查报告" title="检查报告"></button>
+        <button class="rail-button" data-view="requirements" data-icon="scope" aria-label="需求与约束" title="需求与约束"></button>
+      </div>
+      <button class="rail-button rail-bottom" id="settings-button" data-icon="settings" aria-label="工作台设置" title="工作台设置"></button>
+    </nav>
+
+    <aside class="sidebar" id="sidebar" aria-label="任务与边界">
+      <div class="workspace-label"><span data-icon="folder"></span><strong id="project-name">连接中…</strong></div>
+      <div class="sidebar-heading"><span>当前任务</span><button class="icon-button" data-action="task" data-icon="plus" aria-label="新建或补充需求" title="新建或补充需求"></button></div>
+      <div id="sidebar-content"></div>
+      <div class="sidebar-foot">
+        <button class="quiet-mode" id="review-settings" title="检查设置"><span data-icon="shield"></span><strong id="review-mode-label">结束时检查</strong><span data-icon="chevron"></span></button>
+      </div>
+    </aside>
+
+    <header class="topbar">
+      <div class="breadcrumb"><button class="icon-button" id="toggle-sidebar" data-icon="sidebar" aria-label="切换侧边栏" aria-expanded="true" title="侧边栏 · Ctrl+B"></button><span class="wordmark">jev <span>scope</span></span><span class="slash">/</span><strong id="breadcrumb-project">Jev</strong></div>
+      <div class="topbar-actions"><button class="icon-button refresh-button" id="refresh" data-icon="refresh" aria-label="刷新工作区" title="刷新工作区"></button><button class="button primary" id="run-check"><span data-icon="play"></span><span>运行检查</span></button><span class="toolbar-divider"></span><button class="icon-button" id="toggle-bottom" data-icon="bottom" aria-label="切换活动面板" aria-expanded="false" title="活动面板 · Ctrl+J"></button><button class="icon-button" id="toggle-details" data-icon="panel" aria-label="切换详情面板" aria-expanded="false" title="详情面板"></button></div>
+    </header>
+
+    <div class="editor-tabs" role="tablist" aria-label="工作区视图">
+      <button class="editor-tab active" id="tab-overview" role="tab" aria-selected="true" aria-controls="view-content" data-view="overview"><span data-icon="branch"></span>改动</button>
+      <button class="editor-tab" id="tab-report" role="tab" aria-selected="false" aria-controls="view-content" tabindex="-1" data-view="report"><span data-icon="report"></span>报告<span class="nav-count" id="report-count" hidden></span></button>
+      <button class="editor-tab" id="tab-requirements" role="tab" aria-selected="false" aria-controls="view-content" tabindex="-1" data-view="requirements"><span data-icon="scope"></span>需求</button>
+    </div>
+
+    <main class="workspace" id="workspace">
+      <div class="page-body">
+        <h1 id="page-title" class="sr-only">范围总览</h1>
+        <div id="error-banner" class="error-banner" role="alert" hidden></div>
+        <div id="view-content" role="tabpanel" aria-labelledby="tab-overview"><div class="loading-state"><span class="loading-dot"></span>加载中</div></div>
+      </div>
+      <aside class="details-panel" id="details-panel" aria-label="检查详情"></aside>
+    </main>
+
+    <section class="bottom-panel" id="bottom-panel" aria-label="工作台活动" hidden><div class="bottom-heading"><strong>活动</strong><span>当前会话</span><button class="icon-button" id="close-bottom" data-icon="close" aria-label="关闭活动面板"></button></div><div id="activity-log" role="log"></div></section>
+    <footer class="statusbar"><span class="connection" id="connection" title="连接中" aria-label="连接中"><span class="small-dot"></span></span><span id="status-branch"><span data-icon="branch"></span></span><span class="status-spacer"></span><span id="last-sync">同步中</span></footer>
+  </div>
+  <dialog id="dialog"><div id="dialog-content"></div></dialog>
+</body>
+</html>

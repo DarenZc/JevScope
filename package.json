@@ -1,0 +1,24 @@
+{
+  "name": "jev-scope",
+  "version": "0.3.0",
+  "description": "对照用户需求检查开发改动范围的轻量 CLI 与 Codex Hooks",
+  "type": "module",
+  "license": "MIT",
+  "repository": { "type": "git", "url": "https://github.com/DarenZc/JevScope.git" },
+  "homepage": "https://github.com/DarenZc/JevScope#readme",
+  "bugs": { "url": "https://github.com/DarenZc/JevScope/issues" },
+  "files": ["bin/", "src/", "web/", "examples/demo.js", "README.md", "LICENSE", ".env.example"],
+  "engines": { "node": ">=22" },
+  "bin": { "jev-scope": "./bin/scope.js" },
+  "scripts": {
+    "dev": "node bin/ui.js",
+    "start": "node bin/ui.js",
+    "test": "node --test",
+    "demo": "node examples/demo.js",
+    "scope": "node bin/scope.js",
+    "setup:codex": "node bin/scope.js install",
+    "doctor": "node bin/scope.js doctor",
+    "verify:codex": "node evaluation/verify-global-install.js",
+    "verify:package": "node scripts/verify-package.js"
+  }
+}
