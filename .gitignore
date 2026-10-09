@@ -1,0 +1,12 @@
+.env
+.env.*
+!.env.example
+node_modules/
+coverage/
+*.log
+*.tgz
+/.codex/
+/.playwright-cli/
+/output/
+# Generated evaluations can contain local project paths and task excerpts.
+/evaluation/*.json
